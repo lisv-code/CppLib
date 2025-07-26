@@ -1,11 +1,12 @@
-// ****** Logger. (c) 2024 LISV ******
+// ****** Logger. (c) 2024-2025 LISV ******
 #pragma once
 #ifndef _LIS_LOGGER_H_
 #define _LIS_LOGGER_H_
 
 #include <chrono>
-#include <vector>
 #include <functional>
+#include <memory>
+#include <vector>
 #include "FileSystem.h"
 
 namespace LisLog {
@@ -21,14 +22,15 @@ extern const char* TimeFormat_FileName;
 
 class LogTargetBase
 {
+public:
+	enum EventType { etGeneral, etSubsequent };
+	typedef std::function<void(EventType type, const char* txt)> TextWriteFunc;
 protected:
 	int status;
 	LogLevel logLevel;
 
 	LogTargetBase(LogLevel lvl) : status(0), logLevel(lvl) { }
-	virtual ~LogTargetBase() { }
 
-	enum EventType { etGeneric, etSequel };
 	struct LogEvent {
 		EventType Type;
 		LogLevel Level;
@@ -40,11 +42,11 @@ protected:
 
 	static int GetTimeStr(std::chrono::system_clock::time_point tp, char* buf, size_t len,
 		const char* tm_fmt = TimeFormat_String, const char* ms_fmt = TimeFormat_Milliseconds);
-	typedef std::function<void(const char* txt)> TextFunc;
-	static void WriteEventAsText(const LogEvent& evt, TextFunc func);
+	static void WriteEventAsText(const LogEvent& evt, TextWriteFunc func, bool add_newline);
 
 	friend class Logger;
 public:
+	virtual ~LogTargetBase() { }
 	int GetStatus() const { return status; }
 };
 
@@ -75,13 +77,13 @@ struct LoggerSettings
 	// general log settings
 };
 
-const int LogFmtMsgSizeMax = 0x26A0;
+const int LogMsgTxtMaxLen = 0x26A0;
 
 class Logger : public ILogger
 {
 	LoggerSettings settings;
 	LogLevel lowestLogLevel;
-	std::vector<LogTargetBase*> targets;
+	std::vector<std::unique_ptr<LogTargetBase>> targets;
 	std::chrono::system_clock::time_point lastEventTime; // TODO: value should depend on thread (+ class instance) //thread_local
 	bool LogLvlChk(LogLevel event_level, LogLevel target_level);
 	void WriteEvent(LogTargetBase::EventType typ, LogLevel lvl, const char* txt);
@@ -116,11 +118,13 @@ public:
 
 class LogTargetTextFunc : public LogTargetBase
 {
-	TextFunc function;
+	TextWriteFunc function;
+	bool msgAddNewline;
 protected:
 	virtual void WriteEvent(const LogEvent& evt) override;
 public:
-	LogTargetTextFunc(TextFunc func, LogLevel lvl = llInfo) : LogTargetBase(lvl) { function = func; }
+	LogTargetTextFunc(TextWriteFunc func, LogLevel lvl = llInfo, bool msg_add_newline = false)
+		: LogTargetBase(lvl), function(func), msgAddNewline(msg_add_newline) { }
 };
 
 class LogTargetTextFile : public LogTargetBase

@@ -21,7 +21,7 @@ typedef int TaskProcResult;
 typedef std::function<void()> TaskProcStop;
 struct TaskProcCtrl {
 	bool StopFlag = false; // Flag that indicates if task routine should finish or may continue
-	TaskProcStop StopFunc; // Optional function to be called to finish the task
+	TaskProcStop StopFunc; // Optional function that should be called by task manager when the task is about to stop
 };
 typedef void* TaskWorkData;
 typedef std::function<TaskProcResult(TaskProcCtrl* proc_ctrl, TaskWorkData work_data)> TaskProc;
