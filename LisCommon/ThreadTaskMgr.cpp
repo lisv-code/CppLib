@@ -1,4 +1,4 @@
-/****** Thread task manager implementation. (c) 2024 LISV ******/
+/****** Thread task manager implementation. (c) 2024-2025 LISV ******/
 #include "ThreadTaskMgr.h"
 #include <future>
 #include <utility>
@@ -55,25 +55,33 @@ ThreadTaskMgr::ThreadTask* ThreadTaskMgr::GetTask(const TaskId& task_id, bool au
 	return result;
 }
 
-bool ThreadTaskMgr::StartProc(ThreadTask& task_item, TaskProc task_proc, TaskWorkData work_data)
+bool ThreadTaskMgr::StartProc(ThreadTask& task_item,
+	TaskProc task_proc, TaskWorkData work_data, TaskFinCallback fin_callback)
 {
 	if (task_item.ProcThread) {
-		if (task_item.IsProcFinished()) StopProc(task_item, ThreadWaitStopRestartMs);
-		else return false;
+		if (task_item.IsProcFinished()) // The task was executed and already finished, do some cleanup
+			StopProc(task_item, ThreadWaitStopRestartMs);
+		else return false; // The task processing is still pending
 	}
-	task_item.ProcThread = new std::thread([&task_item, task_proc, work_data]() {
-		task_item.ProcResult = task_proc(&task_item.ProcCtrl, work_data);
-		task_item.ProcFinish = std::chrono::system_clock::now();
-	});
-	task_item.ProcStart = std::chrono::system_clock::now();
-	task_item.ProcFinish = TimeValue_Empty;
+	if (task_proc) { // Start new task processing
+		task_item.ProcCtrl.StopFlag = false;
+		task_item.ProcCtrl.StopFunc = nullptr;
+		task_item.ProcFinish = TimeValue_Empty;
+		task_item.ProcStart = std::chrono::system_clock::now();
+		task_item.ProcThread = new std::thread([&task_item, task_proc, work_data, fin_callback]() {
+			task_item.ProcResult = task_proc(&task_item.ProcCtrl, work_data);
+			task_item.ProcFinish = std::chrono::system_clock::now();
+			if (fin_callback) fin_callback(task_item.ProcResult); // Callback after the task normally finished, not killed
+		});
+	}
 	return nullptr != task_item.ProcThread;
 }
 
-bool ThreadTaskMgr::StartTask(const TaskId& task_id, TaskProc task_proc, TaskWorkData work_data)
+bool ThreadTaskMgr::StartTask(const TaskId& task_id, TaskProc task_proc, TaskWorkData work_data,
+	TaskFinCallback fin_callback)
 {
 	auto task = GetTask(task_id, true);
-	return StartProc(*task, task_proc, work_data);
+	return StartProc(*task, task_proc, work_data, fin_callback);
 }
 
 bool ThreadTaskMgr::WaitTask(const TaskId& task_id, int wait_time_ms)
@@ -99,7 +107,8 @@ TaskProcStatus ThreadTaskMgr::GetTaskStatus(const TaskId& task_id)
 	TaskProcStatus result = tpsNone;
 	auto task = GetTask(task_id, false);
 	if (task) {
-		result = (task->ProcThread && !task->IsProcFinished()) ? tpsProcessing : tpsFinished;
+		bool is_thread_active = task->ProcThread && task->ProcThread->joinable();
+		result = (is_thread_active && !task->IsProcFinished()) ? tpsProcessing : tpsFinished;
 	}
 	return result;
 }
@@ -149,7 +158,7 @@ bool ThreadTaskMgr::StopProc(ThreadTask& task_item, int wait_time_ms)
 	if (proc_thread) {
 		if (task_item.ProcCtrl.StopFunc) task_item.ProcCtrl.StopFunc();
 		task_item.ProcCtrl.StopFlag = true;
-		WaitProc(task_item, wait_time_ms);
+		if (WaitProc(task_item, wait_time_ms) < 0) { ; } // Probably something is wrong if thread has timed out
 		delete proc_thread; // TODO: ? blocked thread may hang here, handle the case
 		task_item.ProcThread = nullptr;
 		task_item.ProcCtrl.StopFlag = false;
